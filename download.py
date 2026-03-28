@@ -48,6 +48,7 @@ async def stream_audio(video_id: str):
     process = subprocess.Popen(
         [
             "yt-dlp",
+            "--cookies", "cookies.txt",
             "-f", "m4a/bestaudio/best",
             "--no-playlist",
             "--quiet",
