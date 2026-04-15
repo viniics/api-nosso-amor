@@ -10,13 +10,11 @@ from pydantic import BaseModel
 from supabase import create_client
 from dotenv import load_dotenv
 
-# Pega a pasta atual (api), sobe um nível (nosso-amor) e acha o .env.local
 caminho_env = Path(__file__).parent.parent / ".env.local"
 load_dotenv(caminho_env)
 
 app = FastAPI()
 
-# CORS — permite chamadas do Next.js
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -35,14 +33,9 @@ PASTA_TEMP   = "musicas-temp"    # aguardando pagamento
 PASTA_PERM   = "musicas"         # pagamento confirmado
 
 
-# ── STREAMING — preview sem salvar nada ──────────────────────────────────────
 @app.get("/stream")
 async def stream_audio(video_id: str):
-    """
-    Faz pipe do yt-dlp direto pro browser.
-    O browser começa a tocar nos primeiros segundos.
-    Nada é salvo em disco ou no banco.
-    """
+
     url = f"https://www.youtube.com/watch?v={video_id}"
 
     process = subprocess.Popen(
@@ -52,7 +45,7 @@ async def stream_audio(video_id: str):
             "-f", "m4a/bestaudio/best",
             "--no-playlist",
             "--quiet",
-            "-o", "-",          # stdout
+            "-o", "-",
             url,
         ],
         stdout=subprocess.PIPE,
@@ -79,7 +72,6 @@ async def stream_audio(video_id: str):
     )
 
 
-# ── DOWNLOAD + UPLOAD TEMP — chamado antes do pagamento ──────────────────────
 class DownloadPayload(BaseModel):
     videoId: str
     titulo: str
@@ -87,16 +79,10 @@ class DownloadPayload(BaseModel):
 
 @app.post("/download")
 async def download_audio(payload: DownloadPayload):
-    """
-    1. Verifica se já existe no bucket permanente → retorna URL direto (custo zero)
-    2. Verifica se já existe no bucket temp → retorna URL direto
-    3. Baixa, salva em temp, retorna URL
-    """
     video_id = payload.videoId
     arquivo_perm = f"{PASTA_PERM}/{video_id}.m4a"
     arquivo_temp = f"{PASTA_TEMP}/{video_id}.m4a"
 
-    # — Verifica bucket permanente primeiro —
     try:
         existing = supabase.storage.from_(BUCKET).list(PASTA_PERM, {"search": f"{video_id}.m4a"})
         if existing and len(existing) > 0:
@@ -105,7 +91,6 @@ async def download_audio(payload: DownloadPayload):
     except Exception:
         pass
 
-    # — Verifica bucket temp —
     try:
         existing_temp = supabase.storage.from_(BUCKET).list(PASTA_TEMP, {"search": f"{video_id}.m4a"})
         if existing_temp and len(existing_temp) > 0:
@@ -114,7 +99,6 @@ async def download_audio(payload: DownloadPayload):
     except Exception:
         pass
 
-    # — Baixa o arquivo —
     with tempfile.TemporaryDirectory() as tmpdir:
         output_path = str(Path(tmpdir) / f"{video_id}.m4a")
 
@@ -140,7 +124,6 @@ async def download_audio(payload: DownloadPayload):
         with open(output_path, "rb") as f:
             file_bytes = f.read()
 
-    # — Salva no bucket temp —
     supabase.storage.from_(BUCKET).upload(
         path=arquivo_temp,
         file=file_bytes,
@@ -151,22 +134,16 @@ async def download_audio(payload: DownloadPayload):
     return {"audioUrl": url, "cached": False, "bucket": "temp"}
 
 
-# ── PROMOVER — chamado após pagamento confirmado ──────────────────────────────
 class PromoverPayload(BaseModel):
     videoId: str
 
 
 @app.post("/promover")
 async def promover_audio(payload: PromoverPayload):
-    """
-    Move o arquivo de musicas-temp/ para musicas/.
-    Chamado pelo webhook de pagamento após confirmação.
-    """
     video_id = payload.videoId
     origem  = f"{PASTA_TEMP}/{video_id}.m4a"
     destino = f"{PASTA_PERM}/{video_id}.m4a"
 
-    # Verifica se já está no permanente
     try:
         existing = supabase.storage.from_(BUCKET).list(PASTA_PERM, {"search": f"{video_id}.m4a"})
         if existing and len(existing) > 0:
@@ -175,7 +152,6 @@ async def promover_audio(payload: PromoverPayload):
     except Exception:
         pass
 
-    # Copia temp → permanente
     supabase.storage.from_(BUCKET).copy(origem, destino)
     supabase.storage.from_(BUCKET).remove([origem])
 
@@ -183,7 +159,6 @@ async def promover_audio(payload: PromoverPayload):
     return {"audioUrl": url, "status": "promovido"}
 
 
-# — Health check —
 @app.get("/health")
 async def health():
     return {"status": "ok"}
